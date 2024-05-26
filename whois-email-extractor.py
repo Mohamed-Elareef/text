@@ -138,7 +138,8 @@ total_attempts = sum(len(characters) ** i for i in range(1, len(characters) + 1)
 
 # Iterate through all domains based on total attempts
 #for attempt in range(counter, total_attempts + 1):
-for attempt in range(counter, counter + 50):    
+#for attempt in range(counter, counter + 50): 
+for attempt in range(counter, total_attempts + 1):
     remainder = attempt
     for length in range(1, len(characters) + 1):
         possibilities = len(characters) ** length
