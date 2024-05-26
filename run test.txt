@@ -1,0 +1,14 @@
+[Unit]
+Description=Auto Script Service
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/mohamed/Documents/NewEmailSender/whois-email-extractor.py
+WorkingDirectory=/home/mohamed/Documents/NewEmailSender/
+StandardOutput=inherit
+StandardError=inherit
+Restart=always
+User=mohamed
+
+[Install]
+WantedBy=multi-user.target

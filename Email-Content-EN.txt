@@ -1,0 +1,25 @@
+Hello,
+
+I hope this email finds you well. My name is Mohamed Elareef, an experienced web developer with over 8 years of expertise in backend development using PHP and Laravel, comprehensive skills in Full Stack Development utilizing Vue.js and Laravel, and proficiency in backend development with Symfony and Django. I also have experience in Python development, focusing on Data Science, Analysis, Machine Learning, and Deep Learning.
+
+I am aware of your company's solid reputation and commitment to innovation. Based on my profile, I believe that my skills and experiences can significantly contribute to your company's objectives.
+
+Here's a brief summary of my experiences:
+
+Backend Development in PHP (8 years).
+Backend Development in Laravel (6 years).
+Full Stack Development (Vue.js 2 year / Laravel 6 years).
+Backend Development in Symfony (2 year).
+Python Development (4 years).
+Backend Development in Django (2 year).
+Data Science, Analysis, Machine Learning, and Deep Learning (2 years, concurrent with my master's thesis).
+
+I would like to inquire if there are currently job opportunities for web developers in your company or if there are opportunities to provide programming services and AI data analysis as an independent developer. If applicable, I kindly request that you forward this email to the department or person responsible for hiring.
+
+I am excited about the prospect of joining any team and contributing to its success. I look forward to your response and the opportunity to discuss how I can add value to any organization.
+
+Thank you very much for your time and consideration. I am eager to hear from you soon.
+
+Best regards,
+Mohamed Elareef
++351920263770
