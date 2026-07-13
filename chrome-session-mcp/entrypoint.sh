@@ -16,6 +16,17 @@ done
 export DISPLAY=:99
 mkdir -p "${LIVE_PROFILE:-/profile}"
 
+# --- live interactive view: x11vnc on the Xvfb display + noVNC (websockify) ---
+# Lets you watch AND control the browser from a web URL (manual login/CAPTCHA).
+x11vnc -display :99 -forever -shared -nopw -rfbport 5900 -quiet -bg \
+    -o /tmp/x11vnc.log 2>/dev/null || echo "[entrypoint] x11vnc failed to start"
+
+NOVNC_DIR=/usr/share/novnc
+[ -d "$NOVNC_DIR" ] || NOVNC_DIR=/usr/share/webapps/novnc
+websockify --web "$NOVNC_DIR" "${VIEW_PORT:-6081}" localhost:5900 \
+    > /tmp/websockify.log 2>&1 &
+echo "[entrypoint] noVNC live view on port ${VIEW_PORT:-6081} (display :99)"
+
 echo "[entrypoint] Xvfb pid=$XVFB_PID display=$DISPLAY"
 echo "[entrypoint] starting Chrome Session MCP server on port ${MCP_PORT:-8765}"
 

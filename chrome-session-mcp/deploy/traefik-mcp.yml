@@ -43,10 +43,34 @@ http:
       tls: {}
       priority: 100
 
+    # --- Live interactive view (noVNC) — watch + control the browser by hand ---
+    # Protected by HTTP Basic Auth (full control of your logged-in browser!).
+    chrome-view-http:
+      rule: "Host(`mcp.cloudstars.club`) && PathPrefix(`/chrome-view`)"
+      entrypoints: [web]
+      service: chrome-view-svc
+      middlewares: [chrome-view-strip, chrome-view-auth]
+      priority: 110
+    chrome-view:
+      rule: "Host(`mcp.cloudstars.club`) && PathPrefix(`/chrome-view`)"
+      entrypoints: [websecure]
+      service: chrome-view-svc
+      middlewares: [chrome-view-strip, chrome-view-auth]
+      tls: {}
+      priority: 110
+
   middlewares:
     chrome-stripprefix:
       stripPrefix:
         prefixes: ["/chrome"]
+    chrome-view-strip:
+      stripPrefix:
+        prefixes: ["/chrome-view"]
+    chrome-view-auth:
+      basicAuth:
+        # htpasswd (apr1) — replace with your own: openssl passwd -apr1 <password>
+        users:
+          - "admin:$apr1$REPLACE$REPLACEME"
 
   services:
     mcp-svc:
@@ -57,3 +81,7 @@ http:
       loadBalancer:
         servers:
           - url: "http://172.17.0.1:8765"
+    chrome-view-svc:
+      loadBalancer:
+        servers:
+          - url: "http://172.17.0.1:6081"

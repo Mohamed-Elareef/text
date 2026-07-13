@@ -58,6 +58,17 @@ SOFT_SYNC_INTERVAL = int(os.environ.get("SOFT_SYNC_INTERVAL", "300"))  # seconds
 DEFAULT_NAV_TIMEOUT = int(os.environ.get("NAV_TIMEOUT_MS", "45000"))
 HEADLESS = os.environ.get("HEADLESS", "0") == "1"
 
+# Public base URL this server is reachable at through the reverse proxy, used to
+# build clickable screenshot links, e.g. https://mcp.cloudstars.club/chrome
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+# Where saved screenshots are written and served from (/shots/<id>.png).
+SHOTS_DIR = Path(os.environ.get("SHOTS_DIR", "/app/shots"))
+# Live interactive view (noVNC) URL, shown by the live_view_url tool.
+LIVE_VIEW_URL = os.environ.get("LIVE_VIEW_URL", "")
+# Telegram bot for pushing screenshots.
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
 # Files/dirs never worth copying during a hard sync (locks + caches).
 RSYNC_EXCLUDES = [
     "Singleton*", "*.lock", "lockfile",
@@ -649,17 +660,108 @@ async def browser_evaluate_on_element(script: str, ref: str = "", selector: str 
 
 
 # ---- screenshot ----------------------------------------------------------- #
-@mcp.tool
-async def browser_screenshot(full_page: bool = False, ref: str = "",
-                             selector: str = "") -> Image:
-    """Take a PNG screenshot of the viewport, the full page, or one element."""
+async def _capture_png(full_page: bool = False, ref: str = "", selector: str = "") -> bytes:
     page = await BM.page()
     if ref or selector:
         loc = (await _locator(page, ref, selector)).first
-        data = await loc.screenshot(type="png")
-    else:
-        data = await page.screenshot(full_page=full_page, type="png")
-    return Image(data=data, format="png")
+        return await loc.screenshot(type="png")
+    return await page.screenshot(full_page=full_page, type="png")
+
+
+@mcp.tool
+async def browser_screenshot(full_page: bool = False, ref: str = "",
+                             selector: str = "") -> Image:
+    """Take a PNG screenshot of the viewport, the full page, or one element,
+    returned inline as an image. If your client can't render inline images, use
+    browser_screenshot_url (clickable link) or browser_screenshot_telegram."""
+    return Image(data=await _capture_png(full_page, ref, selector), format="png")
+
+
+@mcp.tool
+async def browser_screenshot_url(full_page: bool = False, ref: str = "",
+                                 selector: str = "") -> str:
+    """Take a screenshot and save it to a clickable HTTPS link (viewable in any
+    browser, no inline image needed). Returns the URL. Use this when inline
+    images don't display in your client."""
+    data = await _capture_png(full_page, ref, selector)
+    SHOTS_DIR.mkdir(parents=True, exist_ok=True)
+    name = f"{int(time.time())}-{base64.urlsafe_b64encode(os.urandom(6)).decode().rstrip('=')}.png"
+    (SHOTS_DIR / name).write_bytes(data)
+    # keep the dir from growing without bound
+    try:
+        shots = sorted(SHOTS_DIR.glob("*.png"), key=lambda p: p.stat().st_mtime)
+        for old in shots[:-200]:
+            old.unlink(missing_ok=True)
+    except Exception:
+        pass
+    if PUBLIC_BASE_URL:
+        return json.dumps({"url": f"{PUBLIC_BASE_URL}/shots/{name}", "bytes": len(data)})
+    return json.dumps({"path": str(SHOTS_DIR / name), "bytes": len(data),
+                       "note": "PUBLIC_BASE_URL not set; returning container path"})
+
+
+async def _telegram_send_photo(png: bytes, caption: str, chat_id: str) -> dict:
+    import httpx
+    if not TELEGRAM_BOT_TOKEN:
+        return {"ok": False, "error": "TELEGRAM_BOT_TOKEN not configured"}
+    cid = chat_id or TELEGRAM_CHAT_ID
+    if not cid:
+        return {"ok": False, "error": "no chat_id (set TELEGRAM_CHAT_ID or pass chat_id; "
+                                      "use telegram_get_chat_id after messaging the bot)"}
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.post(url, data={"chat_id": cid, "caption": caption[:1024]},
+                              files={"photo": ("screenshot.png", png, "image/png")})
+        try:
+            body = r.json()
+        except Exception:
+            body = {"status_code": r.status_code, "text": r.text[:300]}
+    return body
+
+
+@mcp.tool
+async def browser_screenshot_telegram(caption: str = "", full_page: bool = False,
+                                      ref: str = "", selector: str = "",
+                                      chat_id: str = "") -> str:
+    """Take a screenshot and send it to Telegram via the configured bot. Uses
+    TELEGRAM_CHAT_ID unless chat_id is given. Great for checking the browser from
+    your phone or when inline images don't render."""
+    png = await _capture_png(full_page, ref, selector)
+    res = await _telegram_send_photo(png, caption or "browser screenshot", chat_id)
+    return json.dumps({"sent": bool(res.get("ok")), "response": res}, ensure_ascii=False)[:1500]
+
+
+@mcp.tool
+async def telegram_get_chat_id() -> str:
+    """Discover chat IDs that have messaged the bot (via getUpdates). Send any
+    message to the bot first, then call this to get your chat_id."""
+    import httpx
+    if not TELEGRAM_BOT_TOKEN:
+        return json.dumps({"error": "TELEGRAM_BOT_TOKEN not configured"})
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(url)
+        data = r.json()
+    chats = {}
+    for upd in data.get("result", []):
+        msg = upd.get("message") or upd.get("edited_message") or upd.get("channel_post") or {}
+        chat = msg.get("chat")
+        if chat:
+            chats[str(chat.get("id"))] = chat.get("title") or chat.get("username") or \
+                f"{chat.get('first_name', '')} {chat.get('last_name', '')}".strip()
+    return json.dumps({"chats": chats, "hint": "pass one of these ids as chat_id, "
+                       "or set TELEGRAM_CHAT_ID"}, ensure_ascii=False)
+
+
+@mcp.tool
+async def live_view_url() -> str:
+    """Return the live interactive view URL (noVNC) where you can watch the
+    browser in real time AND control it by mouse/keyboard — for manual logins,
+    solving CAPTCHAs, or any step the agent shouldn't automate."""
+    if LIVE_VIEW_URL:
+        return json.dumps({"live_view": LIVE_VIEW_URL,
+                           "note": "open in a browser; you can click and type directly"})
+    return json.dumps({"error": "LIVE_VIEW_URL not configured"})
 
 
 # ---- tabs ----------------------------------------------------------------- #
@@ -762,11 +864,16 @@ def build_app():
     from starlette.middleware import Middleware
     from starlette.middleware.base import BaseHTTPMiddleware
     from starlette.responses import JSONResponse, PlainTextResponse
-    from starlette.routing import Route
+    from starlette.routing import Route, Mount
+    from starlette.staticfiles import StaticFiles
+
+    # Paths reachable without the MCP token: health check, and saved screenshots
+    # (unguessable UUID filenames) so their links open directly in a browser.
+    OPEN_PREFIXES = ("/health", "/shots/")
 
     class TokenAuth(BaseHTTPMiddleware):
         async def dispatch(self, request, call_next):
-            if request.url.path == "/health":
+            if any(request.url.path.startswith(p) for p in OPEN_PREFIXES):
                 return await call_next(request)
             if MCP_TOKEN:
                 auth = request.headers.get("authorization", "")
@@ -784,7 +891,9 @@ def build_app():
         path="/mcp",
         middleware=[Middleware(TokenAuth)],
     )
+    SHOTS_DIR.mkdir(parents=True, exist_ok=True)
     app.router.routes.append(Route("/health", health))
+    app.router.routes.append(Mount("/shots", app=StaticFiles(directory=str(SHOTS_DIR)), name="shots"))
     return app
 
 

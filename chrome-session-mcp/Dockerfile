@@ -7,6 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # --- system deps + Google Chrome (stable) --------------------------------- #
 RUN apt-get update && apt-get install -y --no-install-recommends \
         wget gnupg ca-certificates rsync xvfb x11-utils dbus-x11 \
+        x11vnc novnc websockify \
         fonts-liberation fonts-noto-color-emoji fonts-noto-cjk fonts-kacst \
         procps tini \
     && wget -q -O /tmp/chrome-key.pub https://dl.google.com/linux/linux_signing_key.pub \
@@ -27,7 +28,8 @@ ENV HOST_PROFILE=/host-profile \
     LIVE_PROFILE=/profile \
     CHROME_CHANNEL=chrome \
     MCP_PORT=8765 \
+    VIEW_PORT=6081 \
     DISPLAY=:99
 
-EXPOSE 8765
+EXPOSE 8765 6081
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]
