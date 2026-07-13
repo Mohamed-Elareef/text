@@ -207,6 +207,14 @@ class BrowserManager:
     async def _start_context(self) -> None:
         if self._pw is None:
             self._pw = await async_playwright().start()
+        # Clear stale singleton locks left by a previous container/run — otherwise
+        # Chrome refuses to launch ("profile appears to be in use ... on another
+        # computer") because the lock points at a dead hostname/pid.
+        try:
+            for lock in Path(LIVE_PROFILE).glob("Singleton*"):
+                lock.unlink(missing_ok=True)
+        except Exception:
+            pass
         self._ctx = await self._pw.chromium.launch_persistent_context(
             user_data_dir=LIVE_PROFILE,
             channel=CHROME_CHANNEL,
