@@ -95,6 +95,34 @@ Tabs: `browser_tabs_list`, `browser_tab_new`, `browser_tab_select`,
 Session/cookies: `browser_get_cookies`, `browser_set_cookies`, `sync_session`,
 `session_status`.
 
+Screenshots & viewing:
+- `browser_screenshot` — inline PNG (if your client renders images).
+- `browser_screenshot_url` — saves the PNG and returns a **clickable HTTPS link**
+  (`/chrome/shots/<id>.png`, token-exempt, unguessable name). Use this when inline
+  images don't display in your client.
+- `browser_screenshot_telegram` — pushes the screenshot to a Telegram bot
+  (`browser_screenshot_telegram(chat_id=...)`); `telegram_get_chat_id` lists chats
+  that have messaged the bot.
+- `live_view_url` — returns the live interactive **noVNC** URL.
+
+## Live interactive view (watch + control by hand)
+
+`x11vnc` + `noVNC` run in the container on the Xvfb display, exposed through
+Traefik at a **separate path behind HTTP Basic Auth**:
+
+```
+https://mcp.cloudstars.club/chrome-view/vnc.html?path=chrome-view/websockify&autoconnect=1&resize=scale
+```
+
+Open it in a browser to **see the automated Chrome live and control it with your
+own mouse/keyboard** — for manual logins, solving a CAPTCHA, or any step you'd
+rather do yourself. The agent and you share the same browser, so a login you do
+here persists for the agent's next actions.
+
+Telegram + view are configured via env on `run.sh`: `TELEGRAM_BOT_TOKEN`,
+`TELEGRAM_CHAT_ID`, `PUBLIC_BASE_URL`, `LIVE_VIEW_URL`. The Basic Auth user for
+the view is set in `deploy/traefik-mcp.yml` (`openssl passwd -apr1 <password>`).
+
 ### Typical form flow
 1. `browser_navigate(url)`
 2. `browser_snapshot()` → read the refs of the fields and the submit button
