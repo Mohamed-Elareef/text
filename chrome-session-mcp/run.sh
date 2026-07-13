@@ -10,6 +10,13 @@ set -euo pipefail
 IMAGE="${IMAGE:-chrome-session-mcp}"
 CONTAINER="${CONTAINER:-chrome-session-mcp}"
 PORT="${PORT:-8765}"
+# Bind address for the published port. We do NOT want it on a public interface.
+# Default: the docker bridge gateway (e.g. 172.17.0.1) so a reverse proxy running
+# in another container (Traefik/nginx) can reach it over the bridge, while it
+# stays off the host's public interfaces. Falls back to 127.0.0.1 if the gateway
+# can't be detected. Set BIND=0.0.0.0 only for quick direct local testing.
+BRIDGE_GW="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)"
+BIND="${BIND:-${BRIDGE_GW:-127.0.0.1}}"
 HOST_PROFILE_DIR="${HOST_PROFILE_DIR:-/root/.config/google-chrome}"
 DATA_DIR="${DATA_DIR:-/opt/chrome-mcp}"
 SOFT_SYNC_INTERVAL="${SOFT_SYNC_INTERVAL:-300}"
@@ -44,7 +51,7 @@ docker run -d \
     --name "$CONTAINER" \
     --restart unless-stopped \
     --shm-size=2g \
-    -p "${PORT}:8765" \
+    -p "${BIND}:${PORT}:8765" \
     -v "${HOST_PROFILE_DIR}:/host-profile:ro" \
     -v "${DATA_DIR}/profile:/profile" \
     -e "MCP_TOKEN=${MCP_TOKEN}" \
@@ -52,20 +59,22 @@ docker run -d \
     -e "SOFT_SYNC_INTERVAL=${SOFT_SYNC_INTERVAL}" \
     "$IMAGE"
 
-PUBLIC_IP="$(curl -s --max-time 5 ifconfig.me 2>/dev/null || echo '<SERVER_IP>')"
+# Public endpoint served through the nginx + Cloudflare reverse proxy (see
+# deploy/nginx-chrome.conf). The container port itself is bound to $BIND only.
+PUBLIC_URL="${PUBLIC_URL:-https://mcp.cloudstars.club/chrome}"
 cat <<EOF
 
 ==========================================================================
  Chrome Session MCP is running.
-   Container : $CONTAINER
-   Endpoint  : http://${PUBLIC_IP}:${PORT}/mcp
-   Health    : http://${PUBLIC_IP}:${PORT}/health
+   Container : $CONTAINER  (port bound to ${BIND}:${PORT}, not public)
+   Endpoint  : ${PUBLIC_URL}/mcp
+   Health    : ${PUBLIC_URL}/health
    Token     : ${MCP_TOKEN}
    (token saved at ${TOKEN_FILE})
 
  Add to Claude Code:
    claude mcp add --transport http chrome-session \\
-       http://${PUBLIC_IP}:${PORT}/mcp \\
+       ${PUBLIC_URL}/mcp \\
        --header "Authorization: Bearer ${MCP_TOKEN}"
 
  Logs:  docker logs -f ${CONTAINER}

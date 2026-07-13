@@ -42,16 +42,37 @@ Override defaults via env, e.g.:
 PORT=8765 HOST_PROFILE_DIR=/root/.config/google-chrome SOFT_SYNC_INTERVAL=180 ./run.sh
 ```
 
+## Reverse proxy + TLS (how it's actually exposed)
+
+The container port is **not** published on a public interface. It binds to the
+docker bridge gateway (`172.17.0.1:8765`), and the public HTTPS endpoint is
+served by the existing **Traefik** reverse proxy using **path-based routing** on
+the shared MCP subdomain — so every MCP lives under one domain / one TLS cert and
+you add a new one by adding a path:
+
+```
+https://mcp.cloudstars.club/chrome/mcp   ->  172.17.0.1:8765/mcp   (this server)
+https://mcp.cloudstars.club/<other>/mcp  ->  ...                    (future MCPs)
+```
+
+The Traefik dynamic config is in [`deploy/traefik-mcp.yml`](deploy/traefik-mcp.yml)
+(a `PathPrefix(/chrome)` router at higher priority + a `stripPrefix` middleware so
+the container receives `/mcp`). TLS is the subdomain's existing Cloudflare Origin
+cert; with `providers.file.watch=true` the config hot-reloads, no restart.
+
+> An nginx equivalent is in [`deploy/nginx-chrome.conf`](deploy/nginx-chrome.conf)
+> if you route through nginx instead of Traefik.
+
 ## Connect to Claude Code
 
 ```bash
 claude mcp add --transport http chrome-session \
-    http://<SERVER_IP>:8765/mcp \
+    https://mcp.cloudstars.club/chrome/mcp \
     --header "Authorization: Bearer <TOKEN>"
 ```
 
 (For claude.ai custom connectors that only support a URL, you can instead pass
-the token as a query param: `.../mcp?token=<TOKEN>`.)
+the token as a query param: `.../chrome/mcp?token=<TOKEN>`.)
 
 ## Tools
 

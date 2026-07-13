@@ -1,0 +1,59 @@
+# Traefik v3 dynamic config (file provider) for the Chrome Session MCP.
+#
+# This deployment routes everything through Traefik (the host's :80/:443 entry
+# point), NOT nginx. All MCPs share one subdomain (mcp.cloudstars.club) and are
+# separated by path — add a new MCP by copying the chrome-* router/service and
+# changing the path + upstream port.
+#
+# Drop this into Traefik's file-provider directory (here: /etc/traefik/) — with
+# providers.file.watch=true it reloads automatically, no restart. TLS is the
+# existing Cloudflare Origin cert already configured on the subdomain.
+#
+# Public result:  https://mcp.cloudstars.club/chrome/mcp  ->  172.17.0.1:8765/mcp
+#   - PathPrefix(`/chrome`) + higher priority so it wins over the catch-all mcp router
+#   - stripPrefix removes /chrome so the container receives /mcp (and /health)
+#   - upstream 172.17.0.1:8765 = docker bridge gateway; the container publishes
+#     its port there (bind 172.17.0.1), reachable by Traefik but not public.
+
+http:
+  routers:
+    # --- existing MCP (unchanged) ---
+    mcp-http:
+      rule: "Host(`mcp.cloudstars.club`)"
+      entrypoints: [web]
+      service: mcp-svc
+    mcp:
+      rule: "Host(`mcp.cloudstars.club`)"
+      entrypoints: [websecure]
+      service: mcp-svc
+      tls: {}
+
+    # --- Chrome Session MCP (path-based) ---
+    chrome-http:
+      rule: "Host(`mcp.cloudstars.club`) && PathPrefix(`/chrome`)"
+      entrypoints: [web]
+      service: chrome-svc
+      middlewares: [chrome-stripprefix]
+      priority: 100
+    chrome:
+      rule: "Host(`mcp.cloudstars.club`) && PathPrefix(`/chrome`)"
+      entrypoints: [websecure]
+      service: chrome-svc
+      middlewares: [chrome-stripprefix]
+      tls: {}
+      priority: 100
+
+  middlewares:
+    chrome-stripprefix:
+      stripPrefix:
+        prefixes: ["/chrome"]
+
+  services:
+    mcp-svc:
+      loadBalancer:
+        servers:
+          - url: "http://172.17.0.1:8888"
+    chrome-svc:
+      loadBalancer:
+        servers:
+          - url: "http://172.17.0.1:8765"
