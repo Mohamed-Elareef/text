@@ -41,7 +41,15 @@ from Crypto.Cipher import AES
 from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Hash import SHA1, HMAC
 
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Error as PWError
+# Prefer patchright (a patched Playwright that removes the CDP automation
+# fingerprint — e.g. the Runtime.enable leak that DataDome/Cloudflare detect).
+# Falls back to vanilla playwright if patchright isn't installed.
+try:
+    from patchright.async_api import async_playwright, BrowserContext, Page, Error as PWError
+    USING_PATCHRIGHT = True
+except ImportError:  # pragma: no cover
+    from playwright.async_api import async_playwright, BrowserContext, Page, Error as PWError
+    USING_PATCHRIGHT = False
 
 from fastmcp import FastMCP
 from fastmcp.utilities.types import Image
@@ -57,6 +65,29 @@ MCP_TOKEN = os.environ.get("MCP_TOKEN", "")
 SOFT_SYNC_INTERVAL = int(os.environ.get("SOFT_SYNC_INTERVAL", "300"))  # seconds; 0 disables
 DEFAULT_NAV_TIMEOUT = int(os.environ.get("NAV_TIMEOUT_MS", "45000"))
 HEADLESS = os.environ.get("HEADLESS", "0") == "1"
+
+# --- anti-detection knobs -------------------------------------------------- #
+# Full, non-reduced Chrome UA (Playwright otherwise reports Chrome/NNN.0.0.0).
+USER_AGENT = os.environ.get("USER_AGENT", "")
+LOCALE = os.environ.get("LOCALE", "en-US")
+TIMEZONE = os.environ.get("TIMEZONE", "")  # e.g. Europe/Lisbon; empty = system
+# Spoof the WebGL vendor/renderer so it doesn't scream "SwiftShader / VM".
+WEBGL_VENDOR = os.environ.get("WEBGL_VENDOR", "Intel Inc.")
+WEBGL_RENDERER = os.environ.get("WEBGL_RENDERER", "Intel Iris OpenGL Engine")
+STEALTH = os.environ.get("STEALTH", "1") == "1"
+
+if not USER_AGENT:
+    # Build a full (non version-reduced) desktop Chrome UA from the real binary,
+    # so sites don't see the tell-tale "Chrome/NNN.0.0.0".
+    try:
+        import subprocess as _sp
+        _ver = _sp.run(["google-chrome", "--version"], capture_output=True, text=True,
+                       timeout=10).stdout.strip().split()[-1]
+        if _ver and _ver[0].isdigit():
+            USER_AGENT = (f"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                          f"(KHTML, like Gecko) Chrome/{_ver} Safari/537.36")
+    except Exception:
+        USER_AGENT = ""
 
 # Public base URL this server is reachable at through the reverse proxy, used to
 # build clickable screenshot links, e.g. https://mcp.cloudstars.club/chrome
@@ -173,11 +204,39 @@ def _read_host_cookies() -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 # Browser manager
 # --------------------------------------------------------------------------- #
-STEALTH_INIT_JS = """
-Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-window.chrome = window.chrome || { runtime: {} };
-Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en','ar']});
-Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+def _stealth_js() -> str:
+    """Init script that masks the most common automation/VM fingerprints.
+    The biggest tell (CDP Runtime.enable) is handled by patchright itself; this
+    covers webdriver, the SwiftShader WebGL renderer, plugins and languages."""
+    langs = [LOCALE, LOCALE.split("-")[0], "en"]
+    return f"""
+(() => {{
+  try {{ Object.defineProperty(navigator, 'webdriver', {{get: () => undefined}}); }} catch(e) {{}}
+  try {{ window.chrome = window.chrome || {{ runtime: {{}} }}; }} catch(e) {{}}
+  try {{ Object.defineProperty(navigator, 'languages', {{get: () => {json.dumps(langs)}}}); }} catch(e) {{}}
+  try {{
+    const P = [
+      {{name:'Chrome PDF Plugin'}}, {{name:'Chrome PDF Viewer'}}, {{name:'Native Client'}}
+    ];
+    Object.defineProperty(navigator, 'plugins', {{get: () => P}});
+  }} catch(e) {{}}
+  // WebGL vendor/renderer spoof — hide the SwiftShader software renderer.
+  try {{
+    const patch = (proto) => {{
+      const gp = proto.getParameter;
+      proto.getParameter = function(p) {{
+        if (p === 37445) return {json.dumps(WEBGL_VENDOR)};   // UNMASKED_VENDOR_WEBGL
+        if (p === 37446) return {json.dumps(WEBGL_RENDERER)}; // UNMASKED_RENDERER_WEBGL
+        return gp.apply(this, [p]);
+      }};
+    }};
+    if (window.WebGLRenderingContext) patch(WebGLRenderingContext.prototype);
+    if (window.WebGL2RenderingContext) patch(WebGL2RenderingContext.prototype);
+  }} catch(e) {{}}
+  // Consistent hardware hints
+  try {{ Object.defineProperty(navigator, 'hardwareConcurrency', {{get: () => 8}}); }} catch(e) {{}}
+  try {{ Object.defineProperty(navigator, 'deviceMemory', {{get: () => 8}}); }} catch(e) {{}}
+}})();
 """
 
 
@@ -185,6 +244,7 @@ class BrowserManager:
     def __init__(self) -> None:
         self._pw = None
         self._ctx: Optional[BrowserContext] = None
+        self._closed = True          # is the current context dead / never started?
         self._lock = asyncio.Lock()
         self._sync_started = False
         self.last_soft_sync = 0.0
@@ -193,16 +253,21 @@ class BrowserManager:
 
     # -- lifecycle ------------------------------------------------------- #
     def _launch_args(self) -> list[str]:
+        # Keep the flag list lean: patchright + a real Chrome profile do the heavy
+        # lifting, and extra automation flags are themselves detectable.
         return [
             "--no-sandbox",
             "--disable-dev-shm-usage",
-            "--disable-blink-features=AutomationControlled",
             "--password-store=basic",
             "--no-first-run",
             "--no-default-browser-check",
-            "--disable-features=Translate,OptimizationHints",
+            "--start-maximized",
             "--window-size=1920,1080",
         ]
+
+    def _on_ctx_close(self, *_a) -> None:
+        # Fired when the browser/context dies (e.g. user closed the last tab).
+        self._closed = True
 
     async def _start_context(self) -> None:
         if self._pw is None:
@@ -215,24 +280,33 @@ class BrowserManager:
                 lock.unlink(missing_ok=True)
         except Exception:
             pass
-        self._ctx = await self._pw.chromium.launch_persistent_context(
+        kwargs: dict[str, Any] = dict(
             user_data_dir=LIVE_PROFILE,
             channel=CHROME_CHANNEL,
             headless=HEADLESS,
             args=self._launch_args(),
             ignore_default_args=["--enable-automation"],
-            viewport=None,
             no_viewport=True,
             accept_downloads=True,
+            locale=LOCALE,
         )
-        await self._ctx.add_init_script(STEALTH_INIT_JS)
+        if USER_AGENT:
+            kwargs["user_agent"] = USER_AGENT
+        if TIMEZONE:
+            kwargs["timezone_id"] = TIMEZONE
+        self._ctx = await self._pw.chromium.launch_persistent_context(**kwargs)
+        self._closed = False
+        self._ctx.on("close", self._on_ctx_close)
+        if STEALTH:
+            await self._ctx.add_init_script(_stealth_js())
         self._ctx.set_default_timeout(DEFAULT_NAV_TIMEOUT)
         if not self._ctx.pages:
             await self._ctx.new_page()
 
     async def ensure(self) -> BrowserContext:
         async with self._lock:
-            if self._ctx is None:
+            first_boot = self._ctx is None
+            if first_boot:
                 # first boot: full profile copy so localStorage/IndexedDB come across
                 await self._hard_copy_profile()
                 await self._start_context()
@@ -241,12 +315,17 @@ class BrowserManager:
                 if not self._sync_started and SOFT_SYNC_INTERVAL > 0:
                     self._sync_started = True
                     asyncio.create_task(self._sync_loop())
+            elif self._closed:
+                # context died mid-session (e.g. all tabs were closed) — relaunch
+                # in place without a full profile resync so it's quick.
+                await self._start_context()
+                await self._inject_cookies()
             return self._ctx
 
     async def page(self) -> Page:
         ctx = await self.ensure()
         self._last_activity = time.time()
-        pages = ctx.pages
+        pages = [p for p in ctx.pages if not p.is_closed()]
         if not pages:
             return await ctx.new_page()
         return pages[-1]
@@ -808,12 +887,37 @@ async def browser_tab_select(index: int) -> str:
 
 @mcp.tool
 async def browser_tab_close(index: int) -> str:
-    """Close a tab by index."""
+    """Close a tab by index. Never closes the very last tab (that would close the
+    whole browser) — a blank tab is opened first so the browser stays alive."""
     ctx = await BM.ensure()
     if index < 0 or index >= len(ctx.pages):
         return f"No tab at index {index}"
+    if len(ctx.pages) <= 1:
+        await ctx.new_page()  # keep the browser alive
     await ctx.pages[index].close()
     return f"Closed tab {index}"
+
+
+@mcp.tool
+async def browser_close_other_tabs(keep_index: int = -1) -> str:
+    """Close every tab except one (default: the active/last tab). Use this to
+    clean up when popups or extra tabs have piled up."""
+    ctx = await BM.ensure()
+    pages = list(ctx.pages)
+    if not pages:
+        await ctx.new_page()
+        return "No tabs were open; opened a fresh one."
+    keep = pages[keep_index] if -len(pages) <= keep_index < len(pages) else pages[-1]
+    closed = 0
+    for p in pages:
+        if p is not keep:
+            try:
+                await p.close()
+                closed += 1
+            except Exception:
+                pass
+    await keep.bring_to_front()
+    return f"Closed {closed} tab(s); kept {keep.url}"
 
 
 # ---- cookies / session ---------------------------------------------------- #

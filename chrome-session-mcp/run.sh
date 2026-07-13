@@ -28,6 +28,11 @@ LIVE_VIEW_URL="${LIVE_VIEW_URL:-https://mcp.cloudstars.club/chrome-view/vnc.html
 # Telegram bot for pushing screenshots (optional).
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
+# Anti-detection: locale/timezone (optional). USER_AGENT is derived from the
+# real Chrome version inside the container at startup unless you set it here.
+USER_AGENT="${USER_AGENT:-}"
+LOCALE="${LOCALE:-en-US}"
+TIMEZONE="${TIMEZONE:-}"
 
 cd "$(dirname "$0")"
 
@@ -70,6 +75,9 @@ docker run -d \
     -e "LIVE_VIEW_URL=${LIVE_VIEW_URL}" \
     -e "TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}" \
     -e "TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}" \
+    -e "USER_AGENT=${USER_AGENT}" \
+    -e "LOCALE=${LOCALE}" \
+    -e "TIMEZONE=${TIMEZONE}" \
     "$IMAGE"
 
 # Public endpoint served through the nginx + Cloudflare reverse proxy (see
