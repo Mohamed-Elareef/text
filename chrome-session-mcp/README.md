@@ -90,7 +90,7 @@ Power tools: `browser_evaluate` (arbitrary JS in the page),
 `browser_evaluate_on_element`.
 
 Tabs: `browser_tabs_list`, `browser_tab_new`, `browser_tab_select`,
-`browser_tab_close`.
+`browser_tab_close` (never closes the last tab), `browser_close_other_tabs`.
 
 Session/cookies: `browser_get_cookies`, `browser_set_cookies`, `sync_session`,
 `session_status`.
@@ -128,6 +128,24 @@ the view is set in `deploy/traefik-mcp.yml` (`openssl passwd -apr1 <password>`).
 2. `browser_snapshot()` → read the refs of the fields and the submit button
 3. `browser_fill_form(fields=[{ref:"3", value:"..."}, ...], submit_ref:"7")`
    — or `browser_evaluate(...)` to introspect/submit a tricky custom form.
+
+## Anti-detection & proxy
+
+The browser is driven by **patchright** (a patched Playwright that removes the
+CDP automation fingerprint, e.g. the `Runtime.enable` leak) plus a real Google
+Chrome profile, headful under Xvfb. It reports `navigator.webdriver = false`, a
+full (non-reduced) Chrome UA, and a working WebGL context.
+
+That defeats fingerprint-based detection, but **not IP-reputation detection**.
+Sites behind **DataDome / PerimeterX** (e.g. `idealista.pt`) block *datacenter*
+IPs regardless of how clean the browser looks. On a VPS you have two options:
+
+1. **Residential/mobile proxy (reliable):** set `PROXY_SERVER` (+ `PROXY_USERNAME`
+   / `PROXY_PASSWORD`) and the whole browser routes through it, e.g.
+   `PROXY_SERVER=http://gate.example.com:7000 ./run.sh`.
+2. **Solve once via the live view:** open the noVNC view and pass the human
+   check yourself; the trust cookie persists in the profile (may re-challenge
+   from a datacenter IP).
 
 ## Security notes
 - The endpoint carries your live logged-in sessions and can run arbitrary JS on
