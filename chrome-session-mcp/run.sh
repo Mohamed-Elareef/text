@@ -33,6 +33,10 @@ TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
 USER_AGENT="${USER_AGENT:-}"
 LOCALE="${LOCALE:-en-US}"
 TIMEZONE="${TIMEZONE:-}"
+# Optional residential/mobile proxy (recommended for DataDome sites like idealista).
+PROXY_SERVER="${PROXY_SERVER:-}"
+PROXY_USERNAME="${PROXY_USERNAME:-}"
+PROXY_PASSWORD="${PROXY_PASSWORD:-}"
 
 cd "$(dirname "$0")"
 
@@ -78,6 +82,9 @@ docker run -d \
     -e "USER_AGENT=${USER_AGENT}" \
     -e "LOCALE=${LOCALE}" \
     -e "TIMEZONE=${TIMEZONE}" \
+    -e "PROXY_SERVER=${PROXY_SERVER}" \
+    -e "PROXY_USERNAME=${PROXY_USERNAME}" \
+    -e "PROXY_PASSWORD=${PROXY_PASSWORD}" \
     "$IMAGE"
 
 # Public endpoint served through the nginx + Cloudflare reverse proxy (see

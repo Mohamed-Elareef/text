@@ -75,6 +75,12 @@ TIMEZONE = os.environ.get("TIMEZONE", "")  # e.g. Europe/Lisbon; empty = system
 WEBGL_VENDOR = os.environ.get("WEBGL_VENDOR", "Intel Inc.")
 WEBGL_RENDERER = os.environ.get("WEBGL_RENDERER", "Intel Iris OpenGL Engine")
 STEALTH = os.environ.get("STEALTH", "1") == "1"
+# Optional upstream proxy — the reliable way past IP-reputation blockers like
+# DataDome/PerimeterX on a datacenter server: point this at a residential/mobile
+# proxy. e.g. PROXY_SERVER=http://gate.provider.com:7000
+PROXY_SERVER = os.environ.get("PROXY_SERVER", "")
+PROXY_USERNAME = os.environ.get("PROXY_USERNAME", "")
+PROXY_PASSWORD = os.environ.get("PROXY_PASSWORD", "")
 
 if not USER_AGENT:
     # Build a full (non version-reduced) desktop Chrome UA from the real binary,
@@ -255,6 +261,9 @@ class BrowserManager:
     def _launch_args(self) -> list[str]:
         # Keep the flag list lean: patchright + a real Chrome profile do the heavy
         # lifting, and extra automation flags are themselves detectable.
+        # SwiftShader gives us a working (software) WebGL — without it, headless/
+        # GPU-less Chrome returns a null WebGL context, which is itself a bot tell.
+        # The renderer string is then masked to a real GPU by the stealth script.
         return [
             "--no-sandbox",
             "--disable-dev-shm-usage",
@@ -263,6 +272,9 @@ class BrowserManager:
             "--no-default-browser-check",
             "--start-maximized",
             "--window-size=1920,1080",
+            "--enable-unsafe-swiftshader",
+            "--use-gl=angle",
+            "--use-angle=swiftshader",
         ]
 
     def _on_ctx_close(self, *_a) -> None:
@@ -294,6 +306,12 @@ class BrowserManager:
             kwargs["user_agent"] = USER_AGENT
         if TIMEZONE:
             kwargs["timezone_id"] = TIMEZONE
+        if PROXY_SERVER:
+            proxy: dict[str, Any] = {"server": PROXY_SERVER}
+            if PROXY_USERNAME:
+                proxy["username"] = PROXY_USERNAME
+                proxy["password"] = PROXY_PASSWORD
+            kwargs["proxy"] = proxy
         self._ctx = await self._pw.chromium.launch_persistent_context(**kwargs)
         self._closed = False
         self._ctx.on("close", self._on_ctx_close)
