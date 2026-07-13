@@ -1,0 +1,5 @@
+fastmcp>=2.3.0
+playwright>=1.49.0
+pycryptodome>=3.20.0
+uvicorn>=0.30.0
+starlette>=0.37.0
